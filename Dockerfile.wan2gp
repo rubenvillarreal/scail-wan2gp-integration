@@ -1,0 +1,72 @@
+FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
+
+# ============================================
+# Wan2GP-based SCAIL Implementation
+# Uses quantized INT8 models (~14GB instead of ~28GB)
+# Network volume mounted at /runpod-volume
+# Matches Wan2GP's exact CUDA/PyTorch environment
+# ============================================
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+WORKDIR /app
+
+# ============================================
+# LAYER 1: System dependencies
+# ============================================
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        python3 \
+        python3-pip \
+        python3-dev \
+        build-essential \
+        g++ \
+        gcc \
+        git \
+        wget \
+        curl \
+        cmake \
+        ninja-build \
+        ffmpeg \
+        libsm6 \
+        libxext6 \
+        libglib2.0-0 \
+        libgl1 && \
+    rm -rf /var/lib/apt/lists/* && \
+    ln -s /usr/bin/python3 /usr/bin/python
+
+# ============================================
+# LAYER 2: Python dependencies
+# ============================================
+COPY requirements_wan2gp.txt .
+
+# Upgrade pip first
+RUN pip install --upgrade pip setuptools wheel
+
+# Install PyTorch 2.4.1 with CUDA 12.4 support (better Conv3d CUDA kernel support)
+RUN pip install --no-cache-dir \
+    torch==2.4.1+cu124 torchvision==0.19.1+cu124 \
+    --extra-index-url https://download.pytorch.org/whl/cu124
+
+# Install other requirements
+RUN pip install --no-cache-dir -r requirements_wan2gp.txt
+
+# Set CUDA environment variables for full kernel support
+ENV FORCE_CUDA="1" \
+    TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0"
+
+# ============================================
+# LAYER 3: Application code
+# ============================================
+COPY wan2gp_integration ./wan2gp_integration
+COPY runpod_handler_wan2gp.py .
+
+ENV PYTHONPATH=/app \
+    HF_HUB_OFFLINE=1 \
+    MODEL_BASE_PATH=/runpod-volume \
+    PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512 \
+    CUDA_LAUNCH_BLOCKING=0 \
+    TORCH_HOME=/tmp/torch_cache
+
+# RunPod serverless entrypoint
+CMD ["python", "-u", "runpod_handler_wan2gp.py"]

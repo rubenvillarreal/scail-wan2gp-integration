@@ -1,0 +1,68 @@
+FROM pytorch/pytorch:2.3.1-cuda12.1-cudnn8-runtime
+
+WORKDIR /app
+
+# ============================================
+# NOTE: Model weights are stored on RunPod Network Volume
+# They will be mounted at /runpod-volume at runtime
+# This keeps the Docker image small (~8GB instead of ~99GB)
+# ============================================
+
+# ============================================
+# LAYER 1: System dependencies (rarely change)
+# ============================================
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ffmpeg libsm6 libxext6 libglib2.0-0 && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create fake nvcc to satisfy DeepSpeed/SAT checks (inference doesn't need real nvcc)
+RUN mkdir -p /usr/local/cuda/bin && \
+    echo '#!/bin/bash\necho "Cuda compilation tools, release 12.1, V12.1.105"' > /usr/local/cuda/bin/nvcc && \
+    chmod +x /usr/local/cuda/bin/nvcc
+
+# ============================================
+# LAYER 2: Python dependencies (occasionally change)
+# ============================================
+COPY requirements.txt .
+
+# Install PyTorch with support for newer GPUs (RTX 5090, RTX 6000 Ada, etc.)
+# This reinstalls torch/torchvision with all CUDA architectures enabled
+RUN pip install --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir --force-reinstall \
+        torch==2.3.1 torchvision==0.18.1 \
+        --index-url https://download.pytorch.org/whl/cu121 && \
+    pip install --no-cache-dir -r requirements.txt
+
+# ============================================
+# LAYER 3: Code files (change frequently)
+# ============================================
+COPY sat ./sat
+COPY sgm ./sgm
+COPY configs ./configs
+COPY resources ./resources
+COPY examples ./examples
+COPY eval ./eval
+COPY scripts ./scripts
+COPY notuse ./notuse
+COPY arguments.py .
+COPY data_video.py .
+COPY diffusion_video.py .
+COPY dit_video_crossattn_sc_xc.py .
+COPY sample_video.py .
+COPY README.md LICENSE .
+COPY runpod_handler.py .
+
+ENV PYTHONPATH=/app \
+    HF_HUB_OFFLINE=1 \
+    DS_BUILD_OPS=0 \
+    DS_BUILD_FP_QUANTIZER=0 \
+    DS_SKIP_CUDA_CHECK=1 \
+    CUDA_HOME=/usr/local/cuda \
+    MODEL_BASE_PATH=/runpod-volume/models \
+    PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512 \
+    CUDA_LAUNCH_BLOCKING=0 \
+    TORCH_HOME=/tmp/torch_cache
+
+# RunPod serverless entrypoint
+CMD ["python", "-u", "runpod_handler.py"]

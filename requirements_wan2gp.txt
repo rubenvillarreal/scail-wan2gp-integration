@@ -1,0 +1,45 @@
+# Core dependencies from Wan2GP
+diffusers==0.34.0
+transformers==4.53.1
+tokenizers>=0.20.3
+accelerate>=1.1.1
+sentencepiece
+open_clip_torch>=2.29.0
+einops
+numpy==2.1.2
+
+# Video processing
+moviepy==1.0.3
+av
+imageio
+imageio-ffmpeg
+ffmpeg-python>=0.2.0  # CRITICAL: For video metadata and processing
+opencv-python-headless>=4.8.0  # headless version for serverless (no GUI)
+pillow>=11.3.0
+decord
+
+# Pose extraction dependencies
+segment-anything
+onnxruntime-gpu==1.22
+timm
+insightface==0.7.3
+facexlib==0.3.0
+taichi
+chumpy @ https://github.com/deepbeepmeep/chumpy/releases/download/v0.71/chumpy-0.71-py3-none-any.whl
+smplfitter @ https://github.com/deepbeepmeep/smplfitter/releases/download/v0.2.10/smplfitter-0.2.10-py3-none-any.whl
+
+# Memory optimization (key for quantization)
+mmgp==3.6.9
+
+# Utilities
+omegaconf
+tqdm
+ftfy
+
+# RunPod
+runpod>=1.7.0
+requests>=2.31.0
+
+# PyTorch (will be installed from pip with CUDA support in Dockerfile)
+# torch==2.3.1
+# torchvision==0.18.1
