@@ -281,6 +281,12 @@ def _run_inference(
     # Load and prepare reference image
     ref_image_pil = Image.open(ref_image_path).convert("RGB")
 
+    # Resize reference image to match output resolution (critical for VRAM usage)
+    # Wan2GP does this at wgp.py:5629 with resize_and_remove_background()
+    original_size = ref_image_pil.size  # (W, H)
+    ref_image_pil = TF.resize(ref_image_pil, (512, 896), interpolation=TF.InterpolationMode.LANCZOS)
+    print(f"Reference image resized: {original_size} -> {ref_image_pil.size}")
+
     # Convert reference image to tensor and add time dimension
     # SCAIL expects: (C, 1, H, W) tensor, not PIL Image
     ref_image_tensor = convert_image_to_tensor(ref_image_pil).unsqueeze(1)  # (C, H, W) -> (C, 1, H, W)
@@ -304,6 +310,7 @@ def _run_inference(
         guide_scale=4.0,
         seed=seed or 42,
         model_type="scail",
+        VAE_tile_size=256,  # Enable tiled VAE encoding to save VRAM (critical!)
     )
 
     # Extract video tensor from output dict
