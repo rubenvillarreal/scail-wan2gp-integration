@@ -1691,7 +1691,7 @@ class WanModel(ModelMixin, ConfigMixin):
             del c
         should_calc = True
         x_should_calc = None
-        skips_steps_cache = self.cache
+        skips_steps_cache = getattr(self, "cache", None)
         if skips_steps_cache != None: 
             if skips_steps_cache.cache_type == "mag":
                 if real_step_no <= skips_steps_cache.start_step:
