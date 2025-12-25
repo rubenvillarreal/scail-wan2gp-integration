@@ -109,6 +109,7 @@ def _configure_offload(model: WanAny2V) -> None:
         pipe["clip"] = model.clip.model
 
     kwargs = {}
+    kwargs["extraModelsToQuantize"] = None
     if MMGP_PROFILE in (2, 4, 5):
         budgets = {
             "transformer": 100 if MMGP_PRELOAD == 0 else MMGP_PRELOAD,
