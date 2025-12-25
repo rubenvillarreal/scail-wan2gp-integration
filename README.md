@@ -43,6 +43,51 @@ The release of SCAIL-Preview is intended to demonstrate the soundness of our pro
 - [ ] **SCAIL-Official(1.3B/14B) Model Weights**(Improved Stability and Clarity, Innate Long Video Generation Capability) and Inference Config
 
 ## 🚀 Getting Started
+
+### Wan2GP Integration (Optimized for RunPod)
+
+This repository includes an optimized integration with [Wan2GP](https://github.com/Wan-Video/Wan2.1) for efficient inference on RunPod serverless GPUs. Key optimizations:
+
+- **INT8 Quantization**: Uses `optimum-quanto` for ~14GB VRAM instead of ~28GB
+- **Tiled VAE**: Spatial tiling reduces peak VRAM usage
+- **Memory Management**: Uses `mmgp` library for efficient memory handling
+- **RunPod Handler**: Ready-to-deploy serverless handler with webhook support
+
+#### Installation on RunPod
+
+1. **Install PyTorch 2.6.0 with CUDA 12.4** (required for `optimum-quanto`):
+```bash
+pip install --force-reinstall \
+    torch==2.6.0+cu124 \
+    torchvision==0.21.0+cu124 \
+    torchaudio==2.6.0+cu124 \
+    --index-url https://download.pytorch.org/whl/cu124
+```
+
+2. **Install dependencies**:
+```bash
+# Use the provided script
+bash install_dependencies.sh
+
+# Or manually:
+pip install "numpy>=2.0,<2.3"
+pip install -r requirements_wan2gp.txt
+```
+
+3. **Test inference**:
+```bash
+python test_inference.py
+```
+
+#### Requirements
+- GPU: RTX 6000 Ada (48GB VRAM) or similar
+- CUDA: 12.1+ drivers (PyTorch cu124 wheels are compatible)
+- Python: 3.10-3.12
+
+See `runpod_handler_wan2gp.py` for the serverless handler implementation.
+
+---
+
 ### Checkpoints Download
 
 <!-- **Note:** Due to double-blind review requirements, we do not provide the checkpoint download link here.  -->

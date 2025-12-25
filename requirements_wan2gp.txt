@@ -40,6 +40,9 @@ ftfy
 runpod>=1.7.0
 requests>=2.31.0
 
-# PyTorch (will be installed from pip with CUDA support in Dockerfile)
-# torch==2.3.1
-# torchvision==0.18.1
+# PyTorch - Install separately BEFORE requirements (see install_dependencies.sh)
+# IMPORTANT: optimum-quanto (installed via mmgp) requires torch>=2.6.0
+# Install PyTorch 2.6.0+cu124 first, then run pip install -r requirements_wan2gp.txt
+# torch==2.6.0+cu124
+# torchvision==0.21.0+cu124
+# torchaudio==2.6.0+cu124
