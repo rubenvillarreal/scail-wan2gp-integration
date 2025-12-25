@@ -26,6 +26,7 @@ import sys
 import tempfile
 import uuid
 import subprocess
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -207,6 +208,9 @@ def _upload_file(upload_url: str, file_path: Path, content_type: str) -> None:
 def _create_concat_video(ref_image_path: Path, output_video_path: Path) -> Path:
     """Create concatenated video (reference image + output video)"""
     concat_path = output_video_path.parent / f"{output_video_path.stem}_concat.mp4"
+    if shutil.which("ffmpeg") is None:
+        print("⚠️  ffmpeg not found; skipping concat video generation.")
+        return output_video_path
 
     # Read reference image
     ref_img = cv2.imread(str(ref_image_path))
