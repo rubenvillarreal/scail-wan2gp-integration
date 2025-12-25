@@ -27,6 +27,8 @@ import tempfile
 import uuid
 import subprocess
 import shutil
+import traceback
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -398,6 +400,46 @@ def _maybe_post_webhook(webhook_url: Optional[str], payload: dict) -> None:
         pass
 
 
+class _Tee:
+    def __init__(self, *streams):
+        self._streams = streams
+
+    def write(self, data):
+        for stream in self._streams:
+            stream.write(data)
+            stream.flush()
+
+    def flush(self):
+        for stream in self._streams:
+            stream.flush()
+
+
+@contextmanager
+def _capture_logs(log_path: Path):
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(log_path, "a", encoding="utf-8") as f:
+        tee_out = _Tee(sys.stdout, f)
+        tee_err = _Tee(sys.stderr, f)
+        old_out, old_err = sys.stdout, sys.stderr
+        sys.stdout, sys.stderr = tee_out, tee_err
+        try:
+            yield
+        finally:
+            sys.stdout, sys.stderr = old_out, old_err
+
+
+def _tail_file(path: Path, max_bytes: int = 4096) -> str:
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - max_bytes), os.SEEK_SET)
+            data = f.read()
+        return data.decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
 def handler(event):
     """RunPod entrypoint"""
     job_input = event.get("input", event)
@@ -407,6 +449,7 @@ def handler(event):
     ref_src = job_input.get("reference_image")
     upload_url = job_input.get("upload_url")
     upload_url_concat = job_input.get("upload_url_concat")
+    upload_url_log = job_input.get("upload_url_log")
     webhook_url = job_input.get("webhook_url")
     seed = job_input.get("seed")
 
@@ -429,37 +472,50 @@ def handler(event):
     }
     _maybe_post_webhook(webhook_url, result_payload)
 
-    try:
-        # Get model instance
-        model = get_model()
+    log_path = job_dir / "run.log"
+    with _capture_logs(log_path):
+        try:
+            print(f"[job] id={job_id} prompt_len={len(prompt)} seed={seed}")
+            print(f"[job] pose={pose_path} ref={ref_path}")
+            print(f"[job] steps={SCAIL_STEPS} vae_tile={VAE_TILE_SIZE} profile={MMGP_PROFILE}")
 
-        # Run inference (returns both output and concat)
-        output_path, concat_path = _run_inference(model, prompt, pose_path, ref_path, seed)
+            # Get model instance
+            model = get_model()
 
-        # Upload if requested
-        if upload_url:
-            _upload_file(upload_url, output_path, content_type="video/mp4")
-        if upload_url_concat and concat_path:
-            _upload_file(upload_url_concat, concat_path, content_type="video/mp4")
+            # Run inference (returns both output and concat)
+            output_path, concat_path = _run_inference(model, prompt, pose_path, ref_path, seed)
 
-        result_payload.update({
-            "status": "succeeded",
-            "output_path": str(output_path),
-            "concat_path": str(concat_path),
-            "seed": seed,
-        })
-        _maybe_post_webhook(webhook_url, result_payload)
-        return result_payload
+            # Upload if requested
+            if upload_url:
+                _upload_file(upload_url, output_path, content_type="video/mp4")
+            if upload_url_concat and concat_path:
+                _upload_file(upload_url_concat, concat_path, content_type="video/mp4")
+            if upload_url_log:
+                _upload_file(upload_url_log, log_path, content_type="text/plain")
 
-    except Exception as exc:
-        error_msg = str(exc)
-        fail_payload = {
-            "job_id": job_id,
-            "status": "failed",
-            "error": error_msg,
-        }
-        _maybe_post_webhook(webhook_url, fail_payload)
-        raise
+            result_payload.update({
+                "status": "succeeded",
+                "output_path": str(output_path),
+                "concat_path": str(concat_path),
+                "seed": seed,
+                "log_path": str(log_path),
+            })
+            _maybe_post_webhook(webhook_url, result_payload)
+            return result_payload
+
+        except Exception as exc:
+            error_msg = str(exc)
+            fail_payload = {
+                "job_id": job_id,
+                "status": "failed",
+                "error": error_msg,
+                "traceback": traceback.format_exc(),
+                "log_tail": _tail_file(log_path),
+            }
+            _maybe_post_webhook(webhook_url, fail_payload)
+            if upload_url_log:
+                _upload_file(upload_url_log, log_path, content_type="text/plain")
+            raise
 
 
 def health_check(_event=None):
