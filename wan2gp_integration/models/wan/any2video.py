@@ -1022,7 +1022,8 @@ class WanAny2V:
         if chipmunk:
             self.model.setup_chipmunk()
 
-        offload.shared_state["_radial"] =  offload.shared_state["_attention"]=="radial"
+        attention_mode = offload.shared_state.get("_attention", "sdpa")
+        offload.shared_state["_radial"] = attention_mode == "radial"
         radial = offload.shared_state.get("_radial", False)        
         if radial:
             radial_cache = get_cache("radial")
