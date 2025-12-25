@@ -112,6 +112,13 @@ def get_model():
 
         print("SCAIL model loaded successfully!")
 
+        # CRITICAL FIX: Move VAE encoder/decoder to CUDA
+        # The VAE wrapper is on CUDA, but encoder/decoder models stay on CPU by default
+        # This causes slow_conv3d_forward error when using tiled encoding
+        print("Moving VAE encoder/decoder to CUDA...")
+        _model_instance.vae.model = _model_instance.vae.model.cuda()
+        print(f"VAE model now on: {next(_model_instance.vae.model.parameters()).device}")
+
     return _model_instance
 
 
