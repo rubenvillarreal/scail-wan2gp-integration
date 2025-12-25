@@ -18,6 +18,8 @@ opencv-python-headless>=4.8.0  # headless version for serverless (no GUI)
 pillow>=11.3.0
 decord
 
+# System dependency: ffmpeg (install via apt-get)
+
 # Pose extraction dependencies
 segment-anything
 onnxruntime-gpu==1.22

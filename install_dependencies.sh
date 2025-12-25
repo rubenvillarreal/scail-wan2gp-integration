@@ -4,6 +4,11 @@
 
 set -e  # Exit on error
 
+echo "Installing system dependencies..."
+apt-get update
+apt-get install -y --no-install-recommends ffmpeg
+rm -rf /var/lib/apt/lists/*
+
 echo "Installing PyTorch 2.6.0 with CUDA 12.4 (compatible with CUDA 12.1+ drivers)..."
 pip install --force-reinstall \
     torch==2.6.0+cu124 \
