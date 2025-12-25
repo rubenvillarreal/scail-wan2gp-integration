@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
+FROM runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404
 
 # ============================================
 # Wan2GP-based SCAIL Implementation
@@ -16,24 +16,18 @@ WORKDIR /app
 # ============================================
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        python3 \
-        python3-pip \
-        python3-dev \
-        build-essential \
-        g++ \
-        gcc \
-        git \
-        wget \
-        curl \
-        cmake \
-        ninja-build \
         ffmpeg \
         libsm6 \
         libxext6 \
         libglib2.0-0 \
-        libgl1 && \
-    rm -rf /var/lib/apt/lists/* && \
-    ln -s /usr/bin/python3 /usr/bin/python
+        libgl1 \
+        git \
+        build-essential \
+        g++ \
+        gcc \
+        cmake \
+        ninja-build && \
+    rm -rf /var/lib/apt/lists/*
 
 # ============================================
 # LAYER 2: Python dependencies
@@ -43,17 +37,8 @@ COPY requirements_wan2gp.txt .
 # Upgrade pip first
 RUN pip install --upgrade pip setuptools wheel
 
-# Install PyTorch 2.4.1 with CUDA 12.4 support (better Conv3d CUDA kernel support)
-RUN pip install --no-cache-dir \
-    torch==2.4.1+cu124 torchvision==0.19.1+cu124 \
-    --extra-index-url https://download.pytorch.org/whl/cu124
-
-# Install other requirements
+# Install other requirements (Torch already provided by base image)
 RUN pip install --no-cache-dir -r requirements_wan2gp.txt
-
-# Set CUDA environment variables for full kernel support
-ENV FORCE_CUDA="1" \
-    TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0"
 
 # ============================================
 # LAYER 3: Application code
