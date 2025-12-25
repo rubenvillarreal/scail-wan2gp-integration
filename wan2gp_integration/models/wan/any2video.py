@@ -1000,7 +1000,7 @@ class WanAny2V:
 
 
         # Steps Skipping
-        skip_steps_cache = self.model.cache
+        skip_steps_cache = getattr(self.model, "cache", None)
         if skip_steps_cache != None:
             cache_type = skip_steps_cache.cache_type
             x_count = 3 if phantom or fantasy or multitalk else 2
