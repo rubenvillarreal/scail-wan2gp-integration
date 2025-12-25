@@ -1051,7 +1051,8 @@ class WanAny2V:
             update_loras_slists(self.model, loras_slists, len(original_timesteps), phase_switch_step= phase_switch_step, phase_switch_step2= phase_switch_step2)
             if self.model2 is not None:
                 update_loras_slists(self.model2, loras_slists, len(original_timesteps), phase_switch_step= phase_switch_step, phase_switch_step2= phase_switch_step2)
-        callback(-1, None, True, override_num_inference_steps = updated_num_steps, denoising_extra = denoising_extra)
+        if callback is not None:
+            callback(-1, None, True, override_num_inference_steps = updated_num_steps, denoising_extra = denoising_extra)
 
         def clear():
             clear_caches()
