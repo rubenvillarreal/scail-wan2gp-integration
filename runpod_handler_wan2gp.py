@@ -53,6 +53,9 @@ torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 print(f"cuDNN enabled: {torch.backends.cudnn.enabled}, available: {torch.backends.cudnn.is_available()}")
 
+# Avoid tokenizer fork warnings in serverless environments
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
 # Configuration
 MODEL_DIR = Path(os.environ.get("MODEL_BASE_PATH", "/runpod-volume/models"))
 SCAIL_CONFIG = {
@@ -254,7 +257,8 @@ def _create_concat_video(ref_image_path: Path, output_video_path: Path) -> Path:
             "-f", "concat",
             "-safe", "0",
             "-i", concat_list.name,
-            "-c", "copy",
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
             concat_path.name
         ], check=True, capture_output=True, cwd=str(output_video_path.parent))
     except subprocess.CalledProcessError as e:

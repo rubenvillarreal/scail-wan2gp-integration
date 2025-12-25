@@ -18,8 +18,10 @@ def test_example_001():
     print("Testing SCAIL inference with example 001")
     print("="*60 + "\n")
 
-    # Paths to example files
-    pose_video = Path("examples/001/driving.mp4")
+    # Paths to example files (prefer rendered pose if available)
+    pose_video = Path("examples/001/rendered.mp4")
+    if not pose_video.exists():
+        pose_video = Path("examples/001/driving.mp4")
     ref_image = Path("examples/001/ref.jpg")
 
     if not pose_video.exists():
@@ -77,8 +79,10 @@ def test_example_002():
     print("Testing SCAIL inference with example 002")
     print("="*60 + "\n")
 
-    # Paths to example files
-    pose_video = Path("examples/002/driving.mp4")
+    # Paths to example files (prefer rendered pose if available)
+    pose_video = Path("examples/002/rendered.mp4")
+    if not pose_video.exists():
+        pose_video = Path("examples/002/driving.mp4")
     ref_image = Path("examples/002/ref.jpg")
 
     if not pose_video.exists():
