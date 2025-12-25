@@ -727,8 +727,11 @@ class WanAny2V:
 
         # SCAIL - 3D pose-guided character animation
         if scail:
-            pose_pixels = input_frames
-            image_ref = input_ref_images[0].to(self.device) if input_ref_images is not None else convert_image_to_tensor(pre_video_frame).unsqueeze(1).to(self.device)
+            pose_pixels = input_frames.to(device=self.device, dtype=self.VAE_dtype)
+            if input_ref_images is not None:
+                image_ref = input_ref_images[0].to(device=self.device, dtype=self.VAE_dtype)
+            else:
+                image_ref = convert_image_to_tensor(pre_video_frame).unsqueeze(1).to(device=self.device, dtype=self.VAE_dtype)
             insert_start_frames = window_start_frame_no + prefix_frames_count > 1
             if insert_start_frames:
                 ref_latents = self.vae.encode([image_ref], VAE_tile_size)[0].unsqueeze(0)
@@ -752,8 +755,12 @@ class WanAny2V:
             y = torch.concat([msk_ref, msk_control], dim=1)
             # Downsample pose video by 0.5x before VAE encoding (matches `smpl_downsample` in upstream configs)
             pose_pixels_ds = pose_pixels.permute(1, 0, 2, 3)
-            toto = [pose_pixels]
-            pose_pixels_ds = F.interpolate( pose_pixels_ds, size=(max(1, pose_pixels.shape[-2] // 2), max(1, pose_pixels.shape[-1] // 2)), mode="bilinear", align_corners=False, ).permute(1, 0, 2, 3)
+            pose_pixels_ds = F.interpolate(
+                pose_pixels_ds,
+                size=(max(1, pose_pixels.shape[-2] // 2), max(1, pose_pixels.shape[-1] // 2)),
+                mode="bilinear",
+                align_corners=False,
+            ).permute(1, 0, 2, 3).contiguous()
             pose_latents = self.vae.encode([pose_pixels_ds], VAE_tile_size)[0].unsqueeze(0)
 
             clip_image_start = image_ref.squeeze(1)
