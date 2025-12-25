@@ -37,6 +37,7 @@ import torchvision.transforms.functional as TF
 import numpy as np
 from PIL import Image
 import cv2
+from mmgp import offload
 
 # Add wan2gp_integration to path
 sys.path.insert(0, str(Path(__file__).parent / "wan2gp_integration"))
@@ -65,6 +66,11 @@ SCAIL_CONFIG = {
     "sample_neg_prompt": "",  # Default negative prompt
 }
 
+# Offload configuration (matches Wan2GP profiles)
+MMGP_PROFILE = int(os.environ.get("MMGP_PROFILE", "5"))
+MMGP_PRELOAD = int(os.environ.get("MMGP_PRELOAD_IN_VRAM", "0"))
+VAE_DTYPE = torch.float16 if os.environ.get("VAE_DTYPE", "fp16") == "fp16" else torch.float32
+
 # Model definition for SCAIL
 SCAIL_MODEL_DEF = {
     "URLs": [str(MODEL_DIR / "wan2.1_scail_preview_14B_quanto_bf16_int8.safetensors")],
@@ -81,6 +87,41 @@ class SCAILConfig:
 
 # Global model instance (loaded once, reused across requests)
 _model_instance = None
+_offload_configured = False
+
+
+def _configure_offload(model: WanAny2V) -> None:
+    """Configure mmgp offload profile to keep VRAM usage low."""
+    global _offload_configured
+    if _offload_configured:
+        return
+
+    # Build pipe dict similar to Wan2GP's offload profile usage.
+    pipe = {
+        "transformer": model.model,
+        "text_encoder": model.text_encoder.model,
+        "vae": model.vae.model,
+    }
+    if hasattr(model, "model2") and model.model2 is not None:
+        pipe["transformer2"] = model.model2
+    if hasattr(model, "clip") and model.clip is not None:
+        pipe["clip"] = model.clip.model
+
+    kwargs = {}
+    if MMGP_PROFILE in (2, 4, 5):
+        budgets = {
+            "transformer": 100 if MMGP_PRELOAD == 0 else MMGP_PRELOAD,
+            "text_encoder": 100 if MMGP_PRELOAD == 0 else MMGP_PRELOAD,
+            "*": max(1000 if MMGP_PROFILE == 5 else 3000, MMGP_PRELOAD),
+        }
+        if "transformer2" in pipe:
+            budgets["transformer2"] = 100 if MMGP_PRELOAD == 0 else MMGP_PRELOAD
+        kwargs["budgets"] = budgets
+    elif MMGP_PROFILE == 3:
+        kwargs["budgets"] = {"*": "70%"}
+
+    offload.profile(pipe, profile_no=MMGP_PROFILE, quantizeTransformer=False, **kwargs)
+    _offload_configured = True
 
 
 def get_model():
@@ -107,17 +148,13 @@ def get_model():
             text_encoder_filename=str(MODEL_DIR / "umt5-xxl" / "models_t5_umt5-xxl-enc-bf16.pth"),
             quantizeTransformer=False,  # Already quantized
             dtype=torch.bfloat16,
-            VAE_dtype=torch.float32,
+            VAE_dtype=VAE_DTYPE,
         )
 
         print("SCAIL model loaded successfully!")
 
-        # CRITICAL FIX: Move VAE encoder/decoder to CUDA
-        # The VAE wrapper is on CUDA, but encoder/decoder models stay on CPU by default
-        # This causes slow_conv3d_forward error when using tiled encoding
-        print("Moving VAE encoder/decoder to CUDA...")
-        _model_instance.vae.model = _model_instance.vae.model.cuda()
-        print(f"VAE model now on: {next(_model_instance.vae.model.parameters()).device}")
+        # Configure offload profile to keep most weights off VRAM.
+        _configure_offload(_model_instance)
 
     return _model_instance
 
