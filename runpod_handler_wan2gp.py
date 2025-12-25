@@ -71,6 +71,8 @@ SCAIL_CONFIG = {
 MMGP_PROFILE = int(os.environ.get("MMGP_PROFILE", "5"))
 MMGP_PRELOAD = int(os.environ.get("MMGP_PRELOAD_IN_VRAM", "0"))
 VAE_DTYPE = torch.float16 if os.environ.get("VAE_DTYPE", "fp16") == "fp16" else torch.float32
+SCAIL_STEPS = int(os.environ.get("SCAIL_STEPS", "50"))
+VAE_TILE_SIZE = int(os.environ.get("VAE_TILE_SIZE", "256"))
 
 # Model definition for SCAIL
 SCAIL_MODEL_DEF = {
@@ -246,14 +248,18 @@ def _create_concat_video(ref_image_path: Path, output_video_path: Path) -> Path:
         f.write(f"file '{temp_ref_video.name}'\n")
         f.write(f"file '{output_video_path.name}'\n")
 
-    subprocess.run([
-        "ffmpeg", "-y",
-        "-f", "concat",
-        "-safe", "0",
-        "-i", str(concat_list),
-        "-c", "copy",
-        str(concat_path)
-    ], check=True, capture_output=True, cwd=str(output_video_path.parent))
+    try:
+        subprocess.run([
+            "ffmpeg", "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", concat_list.name,
+            "-c", "copy",
+            concat_path.name
+        ], check=True, capture_output=True, cwd=str(output_video_path.parent))
+    except subprocess.CalledProcessError as e:
+        print(f"⚠️  ffmpeg concat failed ({e.returncode}); skipping concat video generation.")
+        concat_path = output_video_path
 
     # Cleanup temporary files
     temp_ref_video.unlink()
@@ -355,11 +361,11 @@ def _run_inference(
         frame_num=81,  # Number of frames to generate (5 seconds at 16fps)
         height=512,
         width=896,
-        sampling_steps=50,
+        sampling_steps=SCAIL_STEPS,
         guide_scale=4.0,
         seed=seed or 42,
         model_type="scail",
-        VAE_tile_size=256,  # Enable tiled VAE encoding to save VRAM (critical!)
+        VAE_tile_size=VAE_TILE_SIZE,  # Enable tiled VAE encoding to save VRAM
     )
 
     # Extract video tensor from output dict
