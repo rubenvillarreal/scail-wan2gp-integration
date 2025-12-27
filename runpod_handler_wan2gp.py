@@ -46,6 +46,7 @@ from mmgp import offload
 sys.path.insert(0, str(Path(__file__).parent / "wan2gp_integration"))
 
 from models.wan.any2video import WanAny2V
+from shared.attention import get_supported_attention_modes
 from shared.utils import files_locator as fl
 from shared.utils.audio_video import save_video
 from shared.utils.utils import convert_image_to_tensor
@@ -60,12 +61,16 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 # Configuration
 MODEL_DIR = Path(os.environ.get("MODEL_BASE_PATH", "/runpod-volume/models"))
+SCAIL_CLIP_CHECKPOINT = os.environ.get(
+    "SCAIL_CLIP_CHECKPOINT",
+    "models_clip_open-clip-xlm-roberta-large-vit-huge-14-onlyvisual.pth",
+)
 SCAIL_CONFIG = {
     "num_train_timesteps": 1000,
     "text_len": 512,
     "t5_dtype": torch.bfloat16,
     "clip_dtype": torch.bfloat16,
-    "clip_checkpoint": "models_clip_open-clip-xlm-roberta-large-vit-huge-14-onlyvisual.pth",
+    "clip_checkpoint": SCAIL_CLIP_CHECKPOINT,
     "vae_stride": (4, 8, 8),
     "patch_size": (1, 2, 2),
     "param_dtype": torch.bfloat16,
@@ -75,9 +80,20 @@ SCAIL_CONFIG = {
 # Offload configuration (matches Wan2GP profiles)
 MMGP_PROFILE = int(os.environ.get("MMGP_PROFILE", "5"))
 MMGP_PRELOAD = int(os.environ.get("MMGP_PRELOAD_IN_VRAM", "0"))
+SCAIL_FULL_GPU = os.environ.get("SCAIL_FULL_GPU", "0") == "1"
+SCAIL_USE_TF32 = os.environ.get("SCAIL_USE_TF32", "1") == "1"
 VAE_DTYPE = torch.float16 if os.environ.get("VAE_DTYPE", "fp16") == "fp16" else torch.float32
 SCAIL_STEPS = int(os.environ.get("SCAIL_STEPS", "50"))
 VAE_TILE_SIZE = int(os.environ.get("VAE_TILE_SIZE", "256"))
+SCAIL_LORA_NAME = os.environ.get("SCAIL_LORA_NAME", "").strip() or os.environ.get("SCAIL_FAST_LORA_NAME", "").strip()
+SCAIL_LORA_DIR = Path(os.environ.get("SCAIL_LORA_DIR", str(MODEL_DIR / "loras")))
+SCAIL_LORA_MULTIPLIER = os.environ.get("SCAIL_LORA_MULTIPLIER", "1.0").strip()
+SCAIL_ATTENTION = os.environ.get("SCAIL_ATTENTION", "sdpa").strip().lower()
+
+if SCAIL_USE_TF32:
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    torch.set_float32_matmul_precision("high")
 
 # Model definition for SCAIL
 SCAIL_MODEL_DEF = {
@@ -96,12 +112,142 @@ class SCAILConfig:
 # Global model instance (loaded once, reused across requests)
 _model_instance = None
 _offload_configured = False
+_loaded_loras_signature = None
+_attention_configured = False
+
+
+def _parse_csv(value: str) -> list[str]:
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _resolve_lora_paths(lora_names: list[str]) -> list[Path]:
+    lora_paths = []
+    for name in lora_names:
+        candidate = Path(name)
+        if candidate.is_file():
+            lora_paths.append(candidate)
+            continue
+        for root in (SCAIL_LORA_DIR, MODEL_DIR):
+            candidate = root / name
+            if candidate.is_file():
+                lora_paths.append(candidate)
+                break
+        else:
+            raise FileNotFoundError(f"LoRA not found: {name}")
+    return lora_paths
+
+
+def _get_lora_multipliers(count: int) -> list[float]:
+    if not SCAIL_LORA_MULTIPLIER:
+        return [1.0] * count
+    multipliers = []
+    for item in _parse_csv(SCAIL_LORA_MULTIPLIER):
+        multipliers.append(float(item))
+    if len(multipliers) == 1 and count > 1:
+        multipliers = multipliers * count
+    if len(multipliers) != count:
+        raise ValueError(f"Expected {count} LoRA multipliers, got {len(multipliers)}")
+    return multipliers
+
+
+def _get_loras_preprocessor(transformer):
+    preprocess = getattr(transformer, "preprocess_loras", None)
+    if preprocess is None:
+        return None
+    return lambda sd: preprocess("scail", sd)
+
+
+def _prepare_loras(model: WanAny2V, num_steps: int):
+    global _loaded_loras_signature
+    lora_names = _parse_csv(SCAIL_LORA_NAME)
+    if not lora_names:
+        return None
+
+    lora_paths = _resolve_lora_paths(lora_names)
+    lora_multipliers = _get_lora_multipliers(len(lora_paths))
+
+    from shared.utils.loras_mutipliers import parse_loras_multipliers
+    loras_list_mult_choices_nums, loras_slists, errors = parse_loras_multipliers(
+        lora_multipliers,
+        len(lora_paths),
+        num_steps,
+        nb_phases=1,
+    )
+    if errors:
+        raise ValueError(f"Error parsing LoRA multipliers: {errors}")
+
+    signature = (tuple(str(p) for p in lora_paths), tuple(loras_list_mult_choices_nums))
+    if _loaded_loras_signature != signature:
+        transformer = model.model
+        split_linear_modules_map = getattr(transformer, "split_linear_modules_map", None)
+        offload.load_loras_into_model(
+            transformer,
+            [str(path) for path in lora_paths],
+            loras_list_mult_choices_nums,
+            activate_all_loras=True,
+            preprocess_sd=_get_loras_preprocessor(transformer),
+            pinnedLora=MMGP_PROFILE != 5,
+            split_linear_modules_map=split_linear_modules_map,
+        )
+        errors = getattr(transformer, "_loras_errors", [])
+        if errors:
+            error_files = [msg for _, msg in errors]
+            raise RuntimeError("Error while loading LoRAs: " + ", ".join(error_files))
+        _loaded_loras_signature = signature
+
+    return loras_slists
+
+
+def _configure_attention() -> None:
+    global _attention_configured
+    if _attention_configured:
+        return
+
+    supported = get_supported_attention_modes()
+    requested = SCAIL_ATTENTION
+    if requested == "auto":
+        for candidate in ("sage2", "sage", "flash", "xformers", "sdpa"):
+            if candidate in supported:
+                requested = candidate
+                break
+    if requested not in supported:
+        print(f"[scail] attention={requested} not supported; falling back to sdpa")
+        requested = "sdpa"
+    else:
+        print(f"[scail] attention={requested} (supported={supported})")
+    offload.shared_state["_attention"] = requested
+    _attention_configured = True
+
+
+def _move_model_to_cuda(model: WanAny2V) -> None:
+    modules = [
+        ("transformer", getattr(model, "model", None)),
+        ("transformer2", getattr(model, "model2", None)),
+        ("text_encoder", getattr(getattr(model, "text_encoder", None), "model", None)),
+        ("clip", getattr(getattr(model, "clip", None), "model", None)),
+        ("vae", getattr(getattr(model, "vae", None), "model", None)),
+        ("vae2", getattr(getattr(model, "vae2", None), "model", None)),
+    ]
+
+    for name, module in modules:
+        if module is None:
+            continue
+        module.to(device="cuda")
+        print(f"Moved {name} to CUDA")
 
 
 def _configure_offload(model: WanAny2V) -> None:
     """Configure mmgp offload profile to keep VRAM usage low."""
     global _offload_configured
     if _offload_configured:
+        return
+
+    if SCAIL_FULL_GPU or MMGP_PROFILE <= 0:
+        print("Full GPU mode enabled; skipping mmgp offload.")
+        _move_model_to_cuda(model)
+        _offload_configured = True
         return
 
     # Build pipe dict similar to Wan2GP's offload profile usage.
@@ -129,7 +275,15 @@ def _configure_offload(model: WanAny2V) -> None:
     elif MMGP_PROFILE == 3:
         kwargs["budgets"] = {"*": "70%"}
 
-    offload.profile(pipe, profile_no=MMGP_PROFILE, quantizeTransformer=False, **kwargs)
+    lora_names = _parse_csv(SCAIL_LORA_NAME)
+    lora_modules = ["transformer"] if lora_names else None
+    offload.profile(
+        pipe,
+        profile_no=MMGP_PROFILE,
+        quantizeTransformer=False,
+        loras=lora_modules,
+        **kwargs,
+    )
     _offload_configured = True
 
 
@@ -358,21 +512,36 @@ def _run_inference(
     pose_video_tensor = _load_pose_video(pose_video_path, target_height=512, target_width=896)
     print(f"Pose video loaded: {pose_video_tensor.shape}")
 
+    _configure_attention()
+    loras_slists = _prepare_loras(model, SCAIL_STEPS)
+
+    # Ensure inputs are on the same device as the model for full-GPU runs.
+    try:
+        model_device = next(model.model.parameters()).device
+    except StopIteration:
+        model_device = torch.device("cpu")
+    if model_device.type == "cuda":
+        ref_image_tensor = ref_image_tensor.to(device=model_device, non_blocking=True)
+        pose_video_tensor = pose_video_tensor.to(device=model_device, non_blocking=True)
+
     # Call generate() with correct keyword arguments (matching wgp.py usage)
     print("Running SCAIL inference...")
-    output = model.generate(
-        input_prompt=prompt,
-        input_ref_images=[ref_image_tensor],  # List of tensors: [(C, 1, H, W)]
-        input_frames=pose_video_tensor,  # 4D tensor: (C, T, H, W)
-        frame_num=81,  # Number of frames to generate (5 seconds at 16fps)
-        height=512,
-        width=896,
-        sampling_steps=SCAIL_STEPS,
-        guide_scale=4.0,
-        seed=seed or 42,
-        model_type="scail",
-        VAE_tile_size=VAE_TILE_SIZE,  # Enable tiled VAE encoding to save VRAM
-    )
+    frame_count = int(pose_video_tensor.shape[1])
+    with torch.inference_mode():
+        output = model.generate(
+            input_prompt=prompt,
+            input_ref_images=[ref_image_tensor],  # List of tensors: [(C, 1, H, W)]
+            input_frames=pose_video_tensor,  # 4D tensor: (C, T, H, W)
+            frame_num=frame_count,
+            height=512,
+            width=896,
+            sampling_steps=SCAIL_STEPS,
+            guide_scale=4.0,
+            seed=seed or 42,
+            model_type="scail",
+            VAE_tile_size=VAE_TILE_SIZE,  # Enable tiled VAE encoding to save VRAM
+            loras_slists=loras_slists,
+        )
 
     # Extract video tensor from output dict
     # The generate() method returns {"x": video_tensor, "latent_slice": ...}
@@ -477,7 +646,7 @@ def handler(event):
         try:
             print(f"[job] id={job_id} prompt_len={len(prompt)} seed={seed}")
             print(f"[job] pose={pose_path} ref={ref_path}")
-            print(f"[job] steps={SCAIL_STEPS} vae_tile={VAE_TILE_SIZE} profile={MMGP_PROFILE}")
+            print(f"[job] steps={SCAIL_STEPS} vae_tile={VAE_TILE_SIZE} profile={MMGP_PROFILE} full_gpu={SCAIL_FULL_GPU}")
 
             # Get model instance
             model = get_model()

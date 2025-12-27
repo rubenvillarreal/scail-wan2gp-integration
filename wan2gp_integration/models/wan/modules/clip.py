@@ -2,6 +2,7 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import logging
 import math
+import os
 
 import torch
 import torch.nn as nn
@@ -522,8 +523,10 @@ class CLIPModel:
         from mmgp import offload
         # self.model.load_state_dict(
         #     torch.load(checkpoint_path, map_location='cpu'), assign= True)
-
-        offload.load_model_data(self.model, checkpoint_path.replace(".pth", "-bf16.safetensors"), writable_tensors= False)
+        weights_path = checkpoint_path.replace(".pth", "-bf16.safetensors")
+        if not os.path.isfile(weights_path):
+            weights_path = checkpoint_path
+        offload.load_model_data(self.model, weights_path, writable_tensors=False)
 
         # init tokenizer
         self.tokenizer = HuggingfaceTokenizer(

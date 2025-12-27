@@ -787,8 +787,8 @@ class WanAny2V:
         # Clip image
         if hasattr(self, "clip") and clip_image_start is not None:                                   
             clip_image_size = self.clip.model.image_size
-            clip_image_start = resize_lanczos(clip_image_start, clip_image_size, clip_image_size)
-            clip_image_end = resize_lanczos(clip_image_end, clip_image_size, clip_image_size) if clip_image_end is not None else clip_image_start
+            clip_image_start = resize_lanczos(clip_image_start, clip_image_size, clip_image_size).to(self.device)
+            clip_image_end = resize_lanczos(clip_image_end, clip_image_size, clip_image_size).to(self.device) if clip_image_end is not None else clip_image_start
             if model_type == "flf2v_720p":                    
                 clip_context = self.clip.visual([clip_image_start[:, None, :, :], clip_image_end[:, None, :, :] if clip_image_end is not None else clip_image_start[:, None, :, :]])
             else:

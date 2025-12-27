@@ -40,15 +40,46 @@ RUN pip install --upgrade pip setuptools wheel
 # Install other requirements (Torch already provided by base image)
 RUN pip install --no-cache-dir -r requirements_wan2gp.txt
 
+# Build SageAttention from source (enables sage/sage2 attention modes).
+ARG SAGEATTN_REPO=https://github.com/thu-ml/SageAttention.git
+ARG TORCH_CUDA_ARCH_LIST=8.9
+ARG SAGEATTN_MAX_JOBS=2
+ARG SAGEATTN_CMAKE_PARALLEL_LEVEL=2
+ARG SAGEATTN_NVCC_THREADS=1
+ENV TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}
+RUN git clone --depth 1 ${SAGEATTN_REPO} /tmp/SageAttention && \
+    MAX_JOBS=${SAGEATTN_MAX_JOBS} \
+    CMAKE_BUILD_PARALLEL_LEVEL=${SAGEATTN_CMAKE_PARALLEL_LEVEL} \
+    NVCC_THREADS=${SAGEATTN_NVCC_THREADS} \
+    pip install --no-cache-dir --no-build-isolation /tmp/SageAttention && \
+    rm -rf /tmp/SageAttention
+
+# ============================================
+# LAYER 3: ComfyUI + WanVideoWrapper
+# ============================================
+ARG COMFYUI_REPO=https://github.com/comfyanonymous/ComfyUI.git
+ARG WAN_WRAPPER_REPO=https://github.com/kijai/ComfyUI-WanVideoWrapper.git
+
+RUN git clone --depth 1 ${COMFYUI_REPO} /app/ComfyUI && \
+    mkdir -p /app/ComfyUI/custom_nodes && \
+    git clone --depth 1 ${WAN_WRAPPER_REPO} /app/ComfyUI/custom_nodes/ComfyUI-WanVideoWrapper
+
+RUN pip install --no-cache-dir -r /app/ComfyUI/requirements.txt && \
+    pip install --no-cache-dir -r /app/ComfyUI/custom_nodes/ComfyUI-WanVideoWrapper/requirements.txt
+
 # ============================================
 # LAYER 3: Application code
 # ============================================
 COPY wan2gp_integration ./wan2gp_integration
 COPY runpod_handler_wan2gp.py .
+COPY runpod_handler_scail_fast.py .
 
-ENV PYTHONPATH=/app \
+ENV PYTHONPATH=/app:/app/ComfyUI \
     HF_HUB_OFFLINE=1 \
-    MODEL_BASE_PATH=/runpod-volume \
+    MODEL_BASE_PATH=/runpod-volume/models \
+    COMFYUI_PATH=/app/ComfyUI \
+    WAN_WRAPPER_PATH=/app/ComfyUI/custom_nodes/ComfyUI-WanVideoWrapper \
+    SCAIL_LORA_NAME=/runpod-volume/models/Lightx2v/lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors \
     PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512 \
     CUDA_LAUNCH_BLOCKING=0 \
     TORCH_HOME=/tmp/torch_cache
