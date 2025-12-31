@@ -84,6 +84,8 @@ SCAIL_FULL_GPU = os.environ.get("SCAIL_FULL_GPU", "0") == "1"
 SCAIL_USE_TF32 = os.environ.get("SCAIL_USE_TF32", "1") == "1"
 VAE_DTYPE = torch.float16 if os.environ.get("VAE_DTYPE", "fp16") == "fp16" else torch.float32
 SCAIL_STEPS = int(os.environ.get("SCAIL_STEPS", "50"))
+SCAIL_GUIDE_SCALE = float(os.environ.get("SCAIL_GUIDE_SCALE", "1.0"))
+SCAIL_SHIFT = float(os.environ.get("SCAIL_SHIFT", "5.0"))
 VAE_TILE_SIZE = int(os.environ.get("VAE_TILE_SIZE", "256"))
 SCAIL_LORA_NAME = os.environ.get("SCAIL_LORA_NAME", "").strip() or os.environ.get("SCAIL_FAST_LORA_NAME", "").strip()
 SCAIL_LORA_DIR = Path(os.environ.get("SCAIL_LORA_DIR", str(MODEL_DIR / "loras")))
@@ -188,7 +190,7 @@ def _prepare_loras(model: WanAny2V, num_steps: int):
             loras_list_mult_choices_nums,
             activate_all_loras=True,
             preprocess_sd=_get_loras_preprocessor(transformer),
-            pinnedLora=MMGP_PROFILE != 5,
+            pinnedLora=(not SCAIL_FULL_GPU) and (MMGP_PROFILE != 5),
             split_linear_modules_map=split_linear_modules_map,
         )
         errors = getattr(transformer, "_loras_errors", [])
@@ -244,12 +246,6 @@ def _configure_offload(model: WanAny2V) -> None:
     if _offload_configured:
         return
 
-    if SCAIL_FULL_GPU or MMGP_PROFILE <= 0:
-        print("Full GPU mode enabled; skipping mmgp offload.")
-        _move_model_to_cuda(model)
-        _offload_configured = True
-        return
-
     # Build pipe dict similar to Wan2GP's offload profile usage.
     pipe = {
         "transformer": model.model,
@@ -260,6 +256,23 @@ def _configure_offload(model: WanAny2V) -> None:
         pipe["transformer2"] = model.model2
     if hasattr(model, "clip") and model.clip is not None:
         pipe["clip"] = model.clip.model
+
+    lora_names = _parse_csv(SCAIL_LORA_NAME)
+    lora_modules = ["transformer"] if lora_names else None
+
+    if SCAIL_FULL_GPU or MMGP_PROFILE <= 0:
+        profile_no = MMGP_PROFILE if MMGP_PROFILE in (1, 2, 3, 4, 5) else 5
+        print(f"Full GPU mode enabled; initializing mmgp profile {profile_no} with full budgets.")
+        offload.profile(
+            pipe,
+            profile_no=profile_no,
+            quantizeTransformer=False,
+            loras=lora_modules,
+            budgets={"*": "100%"},
+        )
+        _move_model_to_cuda(model)
+        _offload_configured = True
+        return
 
     kwargs = {}
     kwargs["extraModelsToQuantize"] = None
@@ -275,8 +288,6 @@ def _configure_offload(model: WanAny2V) -> None:
     elif MMGP_PROFILE == 3:
         kwargs["budgets"] = {"*": "70%"}
 
-    lora_names = _parse_csv(SCAIL_LORA_NAME)
-    lora_modules = ["transformer"] if lora_names else None
     offload.profile(
         pipe,
         profile_no=MMGP_PROFILE,
@@ -536,7 +547,8 @@ def _run_inference(
             height=512,
             width=896,
             sampling_steps=SCAIL_STEPS,
-            guide_scale=4.0,
+            guide_scale=SCAIL_GUIDE_SCALE,
+            shift=SCAIL_SHIFT,
             seed=seed or 42,
             model_type="scail",
             VAE_tile_size=VAE_TILE_SIZE,  # Enable tiled VAE encoding to save VRAM
